@@ -23,7 +23,7 @@ import 'pdfjs-dist/build/pdf.worker.entry';
   styleUrls: ['./app.component.css']
 })
 export class AppComponent implements OnInit {
-  pdfSrc: string | Uint8Array | PDFSource = './assets/pdf-test.pdf';
+  pdfSrc: string | Uint32Array | PDFSource = './assets/pdf-test.pdf';
 
   error: any;
   page = 1;
@@ -65,7 +65,9 @@ export class AppComponent implements OnInit {
   // 1 MB
   //DEFAULT_CHUNK_SIZE = 1048576;
   // 5 MB
-  DEFAULT_CHUNK_SIZE = 5242880;
+  //DEFAULT_CHUNK_SIZE = 5242880;
+  // TEMP
+  DEFAULT_CHUNK_SIZE = 103000000;
   docCaching: Map<string, object> = new Map();
   rangeObj: any = {};
   resetRangeObj() {
@@ -80,9 +82,9 @@ export class AppComponent implements OnInit {
   }
 
   downloadFile(url: string, name: string) {
-    setTimeout(() => {
+    setTimeout(async() => {
       this.rangeObj = this.resetRangeObj();
-      this.downloadChunk(url, name);
+      await this.downloadChunk(url, name);
     }, 500);
   }
  
@@ -96,17 +98,17 @@ export class AppComponent implements OnInit {
   // base64ToArrayBuffer(base64: any): ArrayBuffer {
   //   let binary_string = window.atob(base64);
   //   let len = binary_string.length;
-  //   let bytes = new Uint8Array(len);
+  //   let bytes = new Uint32Array(len);
   //   for (let i = 0; i < len; i++) {
   //     bytes[i] = binary_string.charCodeAt(i);
   //   }
   //   return bytes.buffer;
   // }
 
-  fileBlob: Uint8Array = new Uint8Array();
+  fileBlob: Uint32Array = new Uint32Array();
   workOnChunk(chunk: any) {
-    const emptyUint8Array = new Uint8Array();
-    this.rangeObj.chunksList = new Uint8Array([...(this.rangeObj.chunksList || emptyUint8Array), ...chunk]);
+    const emptyUint32Array = new Uint32Array();
+    this.rangeObj.chunksList = new Uint32Array([...(this.rangeObj.chunksList || emptyUint32Array), ...chunk]);
 
   };
   
@@ -144,98 +146,70 @@ export class AppComponent implements OnInit {
     return this.docCaching.has(name);
   }
 
-  downloadChunk(url: string, name: string) {
-    // console.log("New Range Obj", this.rangeObj);
-    // console.log("Doc Caching Obj", this.docCaching);
-    
-    if (this.verifyDocCachedOrNot(name)) { 
+  async downloadChunk(url: string, name: string) {
+    if (this.verifyDocCachedOrNot(name)) {
       this.rangeObj = this.docCaching.get(name);
       return;
     }
-    
+  
     console.log(`=========  Chunk ${this.rangeObj.chunkCounter}/${this.rangeObj.totalChunks} Download Started  =========`);
-    // console.log(`Downloaded Range is ${this.rangeObj.start} - ${this.rangeObj.end}`);
-
-
-    // Fetch your stuff  
-    fetch(url, {
-      cache: 'no-cache',
-      headers: {
-        // 'Access-Control-Allow-Origin': '*',
-        'Range': this.createRangeToDownload()
-      }
-    })
-    // Retrieve its body as ReadableStream
-    .then((response) => {
+  
+    try {
+      const response = await fetch(url, {
+        cache: 'no-cache',
+        headers: {
+          'Range': this.createRangeToDownload()
+        }
+      });
+  
       if (!this.rangeObj.fileTotalSize) {
         this.rangeObj.fileTotalSize = this.setTotalFileSize(response);
         this.setTotalChunks();
       }
-      // console.log(`Total file length is ${this.rangeObj.fileTotalSize} and Total Chunks will be ${this.rangeObj.totalChunks}.`);
-      return response.body;
-    })
-
-    // Boilerplate for the stream - refactor it out in a common utility.
-    .then((rs: any) => {
-      const that = this;
-      const reader = rs.getReader();
-
-      return new ReadableStream({
+  
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("Failed to get reader from response body");
+  
+      let that = this;
+      const stream = new ReadableStream({
         async start(controller) {
           while (true) {
-            const readerVal = await reader.read();
-            const { done, value } = readerVal;
-
-            // console.log('reader read value ::', readerVal);
-
-            // When no more data needs to be consumed, break the reading
+            const { done, value } = await reader.read();
+  
             if (done) {
               console.log(`=========  Chunk ${that.rangeObj.chunkCounter}/${that.rangeObj.totalChunks} Download Ended  =========`);
-
+  
               if (that.rangeObj.end === that.rangeObj.fileTotalSize) {
                 console.log(`#########      Full File is Downloaded      #########`);
                 that.fileDownloaded(name);
                 break;
               }
-
-              setTimeout(function () {
-                // that.createBlobToPdf(that.rangeObj.chunksList);
+  
+              setTimeout(() => {
                 that.rangeObj.chunkCounter++;
                 that.updateRange();
                 that.downloadChunk(url, name);
               }, 150);
               break;
             }
-
-            // console.log(`Downloaded Range is ${that.rangeObj.start} - ${that.rangeObj.end}`);
-            // Do your work: ¿¿ Checkout what value returns ¿¿
+  
             that.workOnChunk(value);
-
-            // Optionally append the value if you need the full blob later.
             controller.enqueue(value);
           }
-
-          // Close the stream
+  
           controller.close();
           reader.releaseLock();
         }
-      })
-    })
-    // Create a new response out of the stream (can be avoided?)
-    .then((rs) => {
-      return new Response(rs)
-    })
-    // Create an object URL for the response
-    .then((rs) => {
-      return rs.blob();
-    })
-    .then((blob) => {
-      // this.createBlobToPdf(this.rangeObj.chunksList);
-      // this.rangeObj?.chunksList?.push(blob);
+      });
+  
+      const blob = await new Response(stream).blob();
       return blob;
-    }).catch((error) => {
+  
+    } catch (error) {
       console.error("Error :: =>", error);
-    });
+      return false;
+    }
+
   }
 
   // Load pdf
@@ -436,23 +410,27 @@ export class AppComponent implements OnInit {
     {
       id: 13,
       name: 'working_10-mb',
-      linkSrc: "https://intcodingplatformsa.blob.core.windows.net/audit-apigateway/not-working-linearized-docs/2320_page_doc_li.pdf?sp=r&st=2024-07-01T07:32:22Z&se=2024-07-01T15:32:22Z&skoid=bce96258-60f5-4742-9ee0-d2bf54bc8fba&sktid=cea08e94-287c-4267-8ce2-7fd5066fc6d5&skt=2024-07-01T07:32:22Z&ske=2024-07-01T15:32:22Z&sks=b&skv=2022-11-02&spr=https&sv=2022-11-02&sr=b&sig=HfytB0aSZcfWQfhEBWVQNI3xLy5rdupN5P1aQmBdPek%3D"
-    }, {
+      linkSrc: "https://intcodingplatformsa.blob.core.windows.net/audit-apigateway/not-working-linearized-docs/2320_page_doc_li.pdf?sp=r&st=2024-07-04T04:57:51Z&se=2024-07-04T12:57:51Z&skoid=bce96258-60f5-4742-9ee0-d2bf54bc8fba&sktid=cea08e94-287c-4267-8ce2-7fd5066fc6d5&skt=2024-07-04T04:57:51Z&ske=2024-07-04T12:57:51Z&sks=b&skv=2022-11-02&spr=https&sv=2022-11-02&sr=b&sig=L8a0dsrNPdBKGy%2BLA8jYYKo%2B2e2zgKCPlhH5YjMqJzU%3D"
+    },
+    {
       id: 11,
       name: 'working_20-mb',
-      linkSrc: 'https://intcodingplatformsa.blob.core.windows.net/audit-apigateway/not-working-linearized-docs/1768_page_doc_li.pdf?sp=r&st=2024-07-01T07:32:05Z&se=2024-07-01T15:32:05Z&skoid=bce96258-60f5-4742-9ee0-d2bf54bc8fba&sktid=cea08e94-287c-4267-8ce2-7fd5066fc6d5&skt=2024-07-01T07:32:05Z&ske=2024-07-01T15:32:05Z&sks=b&skv=2022-11-02&spr=https&sv=2022-11-02&sr=b&sig=yZqgbU9H7o4tKD77cVkACRBR2rl85F7U%2BytVlrOksF4%3D'
-    }, {
+      linkSrc: 'https://intcodingplatformsa.blob.core.windows.net/audit-apigateway/not-working-linearized-docs/1768_page_doc_li.pdf?sp=r&st=2024-07-04T05:00:37Z&se=2024-07-04T13:00:37Z&skoid=bce96258-60f5-4742-9ee0-d2bf54bc8fba&sktid=cea08e94-287c-4267-8ce2-7fd5066fc6d5&skt=2024-07-04T05:00:37Z&ske=2024-07-04T13:00:37Z&sks=b&skv=2022-11-02&spr=https&sv=2022-11-02&sr=b&sig=voUegDB5FrRHvcg%2B7kXyHodT6Yvqob3EBzX45WyJmt0%3D'
+    },
+    {
       id: 14,
       name: 'working_50-mb',
-      linkSrc: "https://intcodingplatformsa.blob.core.windows.net/audit-apigateway/not-working-linearized-docs/2023_Horaida%20Lopez_04.09.1943_8MQ0C92UA31_1718287300713_modified_linearlized_1718298172190.pdf?sp=r&st=2024-07-01T07:31:42Z&se=2024-07-01T15:31:42Z&skoid=bce96258-60f5-4742-9ee0-d2bf54bc8fba&sktid=cea08e94-287c-4267-8ce2-7fd5066fc6d5&skt=2024-07-01T07:31:42Z&ske=2024-07-01T15:31:42Z&sks=b&skv=2022-11-02&sv=2022-11-02&sr=b&sig=jIjzaD04VxB3TPYd%2Bd0qytoXcp5UA6d1jM2wCtE5Rc0%3D"
-    },{
+      linkSrc: "https://intcodingplatformsa.blob.core.windows.net/audit-apigateway/not-working-linearized-docs/2023_Horaida%20Lopez_04.09.1943_8MQ0C92UA31_1718287300713_modified_linearlized_1718298172190.pdf?sp=r&st=2024-07-04T05:01:07Z&se=2024-07-04T13:01:07Z&skoid=bce96258-60f5-4742-9ee0-d2bf54bc8fba&sktid=cea08e94-287c-4267-8ce2-7fd5066fc6d5&skt=2024-07-04T05:01:07Z&ske=2024-07-04T13:01:07Z&sks=b&skv=2022-11-02&spr=https&sv=2022-11-02&sr=b&sig=tLYXgA1cvbWM7AyRQKgHnC0yTHvESwEiIYPAs4k5yPI%3D"
+    },
+    {
       id: 12,
       name: 'working_100-mb',
-      linkSrc: "https://intcodingplatformsa.blob.core.windows.net/audit-apigateway/not-working-linearized-docs/working/100-mb_li.pdf?sp=r&st=2024-07-01T07:33:14Z&se=2024-07-01T15:33:14Z&skoid=bce96258-60f5-4742-9ee0-d2bf54bc8fba&sktid=cea08e94-287c-4267-8ce2-7fd5066fc6d5&skt=2024-07-01T07:33:14Z&ske=2024-07-01T15:33:14Z&sks=b&skv=2022-11-02&spr=https&sv=2022-11-02&sr=b&sig=OJ4ry%2BW6qu1n%2FS8vHX4dJwLbydxIpe9uuqqYcxFzDCU%3D"
-    }, {
+      linkSrc: "https://intcodingplatformsa.blob.core.windows.net/audit-apigateway/not-working-linearized-docs/working/100-mb_li.pdf?sp=r&st=2024-07-04T04:59:33Z&se=2024-07-04T12:59:33Z&skoid=bce96258-60f5-4742-9ee0-d2bf54bc8fba&sktid=cea08e94-287c-4267-8ce2-7fd5066fc6d5&skt=2024-07-04T04:59:33Z&ske=2024-07-04T12:59:33Z&sks=b&skv=2022-11-02&spr=https&sv=2022-11-02&sr=b&sig=SibbEi%2Fsjos93f9ZuPptFGCgPZ3b3wCsotGhIbCq3os%3D"
+    },
+    {
       id: 15,
       name: 'working_270-mb',
-      linkSrc: "https://intcodingplatformsa.blob.core.windows.net/audit-apigateway/not-working-linearized-docs/1734_page_doc_li.pdf?sp=r&st=2024-07-01T07:32:56Z&se=2024-07-01T15:32:56Z&skoid=bce96258-60f5-4742-9ee0-d2bf54bc8fba&sktid=cea08e94-287c-4267-8ce2-7fd5066fc6d5&skt=2024-07-01T07:32:56Z&ske=2024-07-01T15:32:56Z&sks=b&skv=2022-11-02&spr=https&sv=2022-11-02&sr=b&sig=JKI6fyim2AhOFggTt6hzAQElB%2BkdnR3myVZWiVZ3toI%3D"
+      linkSrc: "https://intcodingplatformsa.blob.core.windows.net/audit-apigateway/not-working-linearized-docs/1734_page_doc_li.pdf?sp=r&st=2024-07-04T04:59:13Z&se=2024-07-04T12:59:13Z&skoid=bce96258-60f5-4742-9ee0-d2bf54bc8fba&sktid=cea08e94-287c-4267-8ce2-7fd5066fc6d5&skt=2024-07-04T04:59:13Z&ske=2024-07-04T12:59:13Z&sks=b&skv=2022-11-02&spr=https&sv=2022-11-02&sr=b&sig=qcdNSIRxFT3sFI4VP0NskoQS1iG68UWvtIxZ3ZDz05c%3D"
     }
   ];
 
